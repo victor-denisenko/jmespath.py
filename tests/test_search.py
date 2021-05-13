@@ -54,7 +54,7 @@ class TestPythonSpecificCases(unittest.TestCase):
 
     @unittest.skipIf(not hasattr(sys, 'maxint'), 'Test requires long() type')
     def test_can_handle_long_ints(self):
-        result = sys.maxint + 1
+        result = sys.maxsize + 1
         self.assertEqual(jmespath.search('[?a >= `1`].a', [{'a': result}]),
                          [result])
 
@@ -62,3 +62,79 @@ class TestPythonSpecificCases(unittest.TestCase):
         result = decimal.Decimal('3')
         self.assertEqual(jmespath.search('[?a >= `1`].a', [{'a': result}]),
                          [result])
+
+
+# https://github.com/jmespath/jmespath.py/issues/182
+class TestEmptyStringHandling(unittest.TestCase):
+    def setUp(self):
+        self.data = {
+            "foo": {"": {"bar": {"baz": 123}}}
+        }
+
+    def assert_search(self, data, expression, expected_result):
+        actual = jmespath.search(expression, data)
+        self.assertEqual(expected_result, actual)
+        return actual
+
+    def test_quotes_field_sequence(self):
+        self.assert_search(self.data, 'foo."".bar.baz', 123)
+
+    def test_quotes_with_wildcard_field_last(self):
+        self.assert_search(self.data, 'foo."".bar.*', [123])
+
+    def test_quotes_with_wildcard_field_middle(self):
+        self.assert_search(self.data, 'foo."".*.baz', [123])
+
+    def test_quotes_with_wildcards_sequence(self):
+        self.assert_search(self.data, 'foo."".*.*', [[123]])
+
+    # ?
+    def test_field_with_wildcard_first(self):
+        self.assert_search(self.data, 'foo.*[].bar.baz', [123])
+
+    def test_field_with_wildcard_first_flatten(self):
+        self.assert_search(self.data, 'foo.*[].bar.baz', [123])
+
+    def test_field_with_wildcard_first_pipe(self):
+        self.assert_search(self.data, 'foo.*.bar | [].baz', [123])
+
+    # ?
+    def test_multiple_wildcards_with_middle_field(self):
+        self.assert_search(self.data, 'foo.*[].bar.*', [[123]])
+
+    def test_multiple_wildcards_with_middle_field_flatten(self):
+        self.assert_search(self.data, 'foo.*[].bar.*', [[123]])
+
+    def test_multiple_wildcards_with_last_field(self):
+        self.assert_search(self.data, 'foo.*.*.baz', [[123]])
+
+    def test_multiple_wildcards_sequence(self):
+        self.assert_search(self.data, 'foo.*.*.*', [[[123]]])
+
+    def test_multiple_wildcards_separated(self):
+        # Same as 'foo.*.bar.*' but divided in 2 steps
+        # 'foo.*.bar.*' = 'foo.*.bar' + '[*].*'
+        result = self.assert_search(self.data, 'foo.*.bar', [{'baz': 123}])
+        self.assert_search(result, '[*].*', [[123]])
+
+    def test_wildcard_dot_syntax(self):
+        self.assert_search(self.data, 'foo.*', [{'bar': {'baz': 123}}])
+
+    def test_index_wildcards(self):
+        self.assert_search(self.data, 'foo.[*]', [[{'bar': {'baz': 123}}]])
+
+    def test_wildcard_with_field(self):
+        self.assert_search(self.data, 'foo.*.bar', [{'baz': 123}])
+
+    def test_complex_quotes(self):
+        data = {
+            "foo": [
+                {"": {"bar": {"baz": 123}}},
+                {"one": {"bar": {"": "123"}}},
+                {"two": {"bar": {"": "123"}}},
+                {"": {"bar": {"": "123"}}}
+            ]
+        }
+        self.assert_search(data, 'foo[*].*.{"" : bar.*.to_number(@)}[].""[]', [123, 123, 123, 123])
+        self.assert_search(data, 'foo[*].*.{"" : bar.*.to_number(@)}[].*[][]', [123, 123, 123, 123])
+        self.assert_search(data, 'foo[*].*.bar[].*[].to_number(@)', [123, 123, 123, 123])
